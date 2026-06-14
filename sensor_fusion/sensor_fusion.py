@@ -59,9 +59,8 @@ detector = aruco.ArucoDetector(aruco_dict, aruco_params)
 alpha = 0.5
 camera_pos = [WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2]
 pred_pos = [WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2]
-velocity = [0.0, 0.0]
-ACCEL_SCALAR = 50000.0  # Massive scalar so prediction shoots ahead
-gravity_filter = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+ACCEL_SCALAR = 250.0  # Fixed scalar to convert accelerometer to pixels directly
+gravity_filter = {'x': 0.0, 'y': 0.0}
 
 board_marker_ids = set()
 
@@ -91,7 +90,7 @@ def cv2glet(img, fmt='BGR'):
 frame_to_draw = None
 
 def update(dt):
-    global frame_to_draw, camera_pos, pred_pos, velocity, reset_requested, alpha, board_marker_ids, gravity_filter
+    global frame_to_draw, camera_pos, pred_pos, reset_requested, alpha, board_marker_ids, gravity_filter
 
     ret, frame = cap.read()
     if not ret: return
@@ -152,42 +151,25 @@ def update(dt):
 
     if reset_requested:
         pred_pos = [camera_pos[0], camera_pos[1]]
-        velocity = [0.0, 0.0]
         reset_requested = False
 
-    # 3D Gravity Filter: track X, Y, and Z!
+    # Isolate gravity (Low-Pass Filter)
     gravity_filter['x'] = 0.98 * gravity_filter['x'] + 0.02 * accel_data['x']
     gravity_filter['y'] = 0.98 * gravity_filter['y'] + 0.02 * accel_data['y']
-    gravity_filter['z'] = 0.98 * gravity_filter['z'] + 0.02 * accel_data['z']
     
+    # Extract linear acceleration (High-Pass Filter)
     lin_ax = accel_data['x'] - gravity_filter['x']
     lin_ay = accel_data['y'] - gravity_filter['y']
-    lin_az = accel_data['z'] - gravity_filter['z']
 
-    # Project linear acceleration onto the gravity vector to get TRUE WORLD VERTICAL acceleration!
-    g_mag = math.sqrt(gravity_filter['x']**2 + gravity_filter['y']**2 + gravity_filter['z']**2)
-    if g_mag > 0.001:
-        down_accel = (lin_ax * gravity_filter['x'] + lin_ay * gravity_filter['y'] + lin_az * gravity_filter['z']) / g_mag
-    else:
-        down_accel = 0.0
+    # Assignment Hint: "multiply a fixed scalar number to the accelerometer"
+    # This beautifully simple approach converts acceleration directly to a position offset!
+    # Both axes receive a minus sign to match your specific phone's orientation and the mirrored display.
+    offset_x = -lin_ax * ACCEL_SCALAR
+    offset_y = lin_ay * ACCEL_SCALAR * 1.5  # Slightly increased Y sensitivity
 
-    # Physics Update
-    ax = -lin_ax * ACCEL_SCALAR
-    ay = down_accel * ACCEL_SCALAR
-    
-    velocity[0] += ax * dt
-    velocity[1] += ay * dt
-    
-    # Reduced friction so velocity isn't instantly killed
-    velocity[0] *= 0.95
-    velocity[1] *= 0.95
-
-    pred_pos[0] += velocity[0] * dt
-    pred_pos[1] += velocity[1] * dt
-
-    # Complementary filter
-    pred_pos[0] = alpha * pred_pos[0] + (1 - alpha) * camera_pos[0]
-    pred_pos[1] = alpha * pred_pos[1] + (1 - alpha) * camera_pos[1]
+    # Complementary filter: blend camera position with our accelerometer-offset prediction
+    pred_pos[0] = alpha * (pred_pos[0] + offset_x) + (1 - alpha) * camera_pos[0]
+    pred_pos[1] = alpha * (pred_pos[1] + offset_y) + (1 - alpha) * camera_pos[1]
 
     # Draw Camera Position (Red Dot)
     cv2.circle(display_frame, (int(camera_pos[0]), int(camera_pos[1])), 15, (0, 0, 255), -1)
