@@ -74,3 +74,13 @@ python sensor_fusion.py [DIPPID_PORT]
    - *High Alpha (~0.9)*: Relies heavily on the accelerometer. Highly responsive but prone to drift over time due to integration error.
    - *Low Alpha (~0.1)*: Relies heavily on the camera. Absolute and stable, but can lag slightly.
 6. **Reset Prediction**: Press **Button 1** on the DIPPID app to instantly snap the predicted (green) position back to the camera's raw (red) position.
+
+### Reflection on Implementation
+
+The complementary filter successfully blends the absolute position tracking from the camera (red dot) with the high-frequency relative motion data from the smartphone's accelerometer (fused into the green dot). 
+
+When `alpha` is high (closer to 1.0), the prediction relies heavily on the accelerometer data; this makes it very responsive to quick movements but susceptible to drift over time because accelerometer integration accumulates error. 
+
+When `alpha` is low (closer to 0.0), the prediction relies heavily on the camera; it becomes very stable and accurate in absolute space, but might feel slightly laggy due to the camera's framerate or processing delay.
+
+By dynamically adjusting `alpha`, we can find the sweet spot where the prediction is both responsive (thanks to accelerometer) and stable (thanks to camera correction).

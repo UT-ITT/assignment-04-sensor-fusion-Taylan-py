@@ -60,7 +60,8 @@ alpha = 0.5
 camera_pos = [WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2]
 pred_pos = [WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2]
 velocity = [0.0, 0.0]
-ACCEL_SCALAR = 500.0  # Scalar for accelerometer
+ACCEL_SCALAR = 50000.0  # Massive scalar so prediction shoots ahead
+gravity_filter = {'x': 0.0, 'y': 0.0, 'z': 0.0}
 
 board_marker_ids = set()
 
@@ -90,7 +91,7 @@ def cv2glet(img, fmt='BGR'):
 frame_to_draw = None
 
 def update(dt):
-    global frame_to_draw, camera_pos, pred_pos, velocity, reset_requested, alpha, board_marker_ids
+    global frame_to_draw, camera_pos, pred_pos, velocity, reset_requested, alpha, board_marker_ids, gravity_filter
 
     ret, frame = cap.read()
     if not ret: return
@@ -139,27 +140,47 @@ def update(dt):
                     if w_ids[i][0] not in board_marker_ids:
                         # Found the moving marker (ID 5 or 23, or any non-board marker)
                         c = w_corners[i][0]
-                        camera_pos[0] = np.mean(c[:, 0])
+                        camera_pos[0] = WINDOW_WIDTH - np.mean(c[:, 0]) # Mirror X coordinate
                         camera_pos[1] = np.mean(c[:, 1])
                         break
 
-    display_frame = warped_frame if warped_frame is not None else frame.copy()
+    # Mirror the display for intuitive feedback
+    if warped_frame is not None:
+        display_frame = cv2.flip(warped_frame, 1)
+    else:
+        display_frame = cv2.flip(frame.copy(), 1)
 
     if reset_requested:
         pred_pos = [camera_pos[0], camera_pos[1]]
         velocity = [0.0, 0.0]
         reset_requested = False
 
+    # 3D Gravity Filter: track X, Y, and Z!
+    gravity_filter['x'] = 0.98 * gravity_filter['x'] + 0.02 * accel_data['x']
+    gravity_filter['y'] = 0.98 * gravity_filter['y'] + 0.02 * accel_data['y']
+    gravity_filter['z'] = 0.98 * gravity_filter['z'] + 0.02 * accel_data['z']
+    
+    lin_ax = accel_data['x'] - gravity_filter['x']
+    lin_ay = accel_data['y'] - gravity_filter['y']
+    lin_az = accel_data['z'] - gravity_filter['z']
+
+    # Project linear acceleration onto the gravity vector to get TRUE WORLD VERTICAL acceleration!
+    g_mag = math.sqrt(gravity_filter['x']**2 + gravity_filter['y']**2 + gravity_filter['z']**2)
+    if g_mag > 0.001:
+        down_accel = (lin_ax * gravity_filter['x'] + lin_ay * gravity_filter['y'] + lin_az * gravity_filter['z']) / g_mag
+    else:
+        down_accel = 0.0
+
     # Physics Update
-    ax = accel_data['x'] * ACCEL_SCALAR
-    ay = accel_data['y'] * ACCEL_SCALAR
+    ax = -lin_ax * ACCEL_SCALAR
+    ay = down_accel * ACCEL_SCALAR
     
     velocity[0] += ax * dt
     velocity[1] += ay * dt
     
-    # Simple friction to prevent infinite drift
-    velocity[0] *= 0.9
-    velocity[1] *= 0.9
+    # Reduced friction so velocity isn't instantly killed
+    velocity[0] *= 0.95
+    velocity[1] *= 0.95
 
     pred_pos[0] += velocity[0] * dt
     pred_pos[1] += velocity[1] * dt
@@ -178,9 +199,14 @@ def update(dt):
     cv2.putText(display_frame, f"Alpha: {alpha:.2f} (Use Left/Right Arrows)", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     cv2.putText(display_frame, "DIPPID Btn 1 to Reset Prediction", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     cv2.putText(display_frame, "Red: Camera | Green: Prediction", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cv2.putText(display_frame, "ESC/Q: Quit | F: Fullscreen", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    # Display Accelerometer data so user knows it is connected
+    accel_text = f"DIPPID Accel -> X: {accel_data['x']:.2f} | Y: {accel_data['y']:.2f}"
+    cv2.putText(display_frame, accel_text, (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     
     if warped_frame is None:
-        cv2.putText(display_frame, "Waiting for 4 ArUco Board Markers...", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(display_frame, "Waiting for 4 ArUco Board Markers...", (20, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
     frame_to_draw = cv2glet(display_frame, 'BGR')
 
@@ -193,12 +219,14 @@ def on_key_press(symbol, modifiers):
         alpha = min(1.0, alpha + 0.05)
     elif symbol == key.LEFT:
         alpha = max(0.0, alpha - 0.05)
+    elif symbol == key.F:
+        window.set_fullscreen(not window.fullscreen)
 
 @window.event
 def on_draw():
     window.clear()
     if frame_to_draw:
-        frame_to_draw.blit(0, 0, 0)
+        frame_to_draw.blit(0, 0, width=window.width, height=window.height)
 
 # Schedule update at 30 fps
 pyglet.clock.schedule_interval(update, 1/30.0)
